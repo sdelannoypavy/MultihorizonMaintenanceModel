@@ -2,6 +2,7 @@ using Gurobi
 using JuMP  
 using Distributions
 using Random
+using StatsBase
 
 function V(s,q_i,S,h,product,nb_state,P_w,P_m,Q,Vals)
 
@@ -88,10 +89,8 @@ function V(s,q_i,S,h,product,nb_state,P_w,P_m,Q,Vals)
 end
 
 
-function Bellman(Q,S,h,product,nb_state,P_w,P_m)
+function Bellman(years,Q,S,h,product,nb_state,P_w,P_m)
 
-    #years = 30
-    years = 1
     Tmax = 6*years
 
     Vals_old = zeros(nb_state, Q+1)
@@ -107,7 +106,9 @@ function Bellman(Q,S,h,product,nb_state,P_w,P_m)
         Vals_new = zeros(nb_state, Q+1)
         for s in 1:nb_state
             for q in 0:Q
-                val, m_opt, k_opt = V(s,q,S,h,product,nb_state,P_w,P_m,Q,Vals_old)
+                h_t = h[t, :, :]  # taille (S, T)
+                product_t = product[t, :, :]
+                val, m_opt, k_opt = V(s,q,S,h_t,product_t,nb_state,P_w,P_m,Q,Vals_old)
                 # V doit retourner (valeur, action optimale)
                 Vals_new[s, q+1] = val
                 Policies_m[s,q+1,Tmax - t + 1,:] = m_opt
@@ -122,9 +123,72 @@ function Bellman(Q,S,h,product,nb_state,P_w,P_m)
 
 end
 
+function simulate_period(Policies_m_t,state,h,nb_state)
+
+    states = [state]
+
+    d = max(state - 1,1)
+
+    u = [0 for i in 1:60]
+    q = [0 for i in 1:60]
+
+    q[1] == d*Policies_m_t[1]
+
+    last_state = state
+
+    if (q[1]>0)&&(h[1]==1)
+        u[1] == 1
+    end
+
+    for t in 1:60-1
+        q[t+1] == q[t] - u[t] + d*Policies_m_t[t+1]
+        if (q[t+1]>0)&&(h[t+1]==1)
+            u[t+1] == 1
+        end
+
+        probas = [0.0 for i in 1:nb_state]
+
+        if u[t+1] == 0
+            probas = P_w[last_state, :]
+        else 
+            probas = P_m[last_state, :]
+        end
+        last_state = sample(1:nb_state, Weights(probas))
+
+        push!(states, last_states)
+    end
+
+    return states
+
+end 
 
 
+function simulate(Policies_m,Policies_k,h,nb_state, years,Q)
 
+    state_list = []
+
+    last_state = 1
+    last_q = Q
+
+    for t in 1:(6*years)
+
+        Policies_k_t = Policies_k[last_state,last_q,t,:]
+        sum_k = sum(Policies_k_t )
+
+        Policies_m_t = Policies_m[last_state,last_q,t,:]
+        h_t = h[t, :, :]
+
+        new_states = simulate_period(Policies_m_t,last_state,h_t,nb_state)
+
+        last_q -= sum_k
+        last_state = new_states[end]
+        push!(state_list,new_states)
+
+    end
+
+    return state_list
+
+end
 
 
 #script
@@ -139,12 +203,11 @@ Q = 1
 S = 3
 
 # wind park always produces the maximum amount of electricity
-product = [100 for s in 1:S, t in 1:60]
+product_month = [100 for s in 1:S, t in 1:60]
 
 # random wave height, accessible with proba 0.9
 d = Bernoulli(0.9)
-h = [Int(rand(d)) for s in 1:S, t in 1:60]
-
+h_month = [Int(rand(d)) for s in 1:S, t in 1:60]
 
 P_w = zeros(nb_state, nb_state)
 
@@ -164,4 +227,19 @@ end
 
 
 
-#Vals_all, Policies = Bellman(Q,S,h,product,nb_state,P_w,P_m)
+
+years = 1
+
+h = Array{Float64}(undef, 6*years, S, 60)
+for t in 1:(6*years)
+    h[t,:,:] = h_month
+end
+
+product = Array{Float64}(undef, 6*years, S, 60)
+for t in 1:(6*years)
+    product[t,:,:] = product_month
+end
+
+
+#Vals_all, Policies_m, Policies_k = Bellman(years,Q,S,h,product,nb_state,P_w,P_m)
+#state_list = simulate(Policies_m,Policies_k,h,nb_state, years,Q)
