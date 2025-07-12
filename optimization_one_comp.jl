@@ -4,7 +4,7 @@ using Distributions
 using Random
 using StatsBase
 
-function V(T,s,q_i,S,h,product,nb_state,P_w,P_m,Q,Vals)
+function V(T,s,q_i,S,h,product,nb_state,P_w,P_m,Q,Vals,is_end_year)
 
     # Components have the same degradation model
 
@@ -17,37 +17,42 @@ function V(T,s,q_i,S,h,product,nb_state,P_w,P_m,Q,Vals)
 
     model = Model(Gurobi.Optimizer)
 
-    @variable(model, x[1:(S+1),1:(T+1),1:nb_state] >= 0)
+    @variable(model, x[1:S,1:(T+1),1:nb_state] >= 0)
 
     @variable(model, c[1:(T+1)] >= 0)
     @variable(model, p_evac[1:S,1:T,1:nb_state] >= 0)
 
     @variable(model, m[1:T], Bin)
-    @variable(model, u[1:(S+1),1:T], Bin)
-    @variable(model, ong_m[1:(S+1),1:T], Bin) #ongoing maintenance
-    @variable(model, q[1:(S+1),1:T] >= 0)
+    @variable(model, u[1:S,1:T], Bin)
+    @variable(model, ong_m[1:S,1:T], Bin) #ongoing maintenance
+    @variable(model, q[1:S,1:T] >= 0)
     @variable(model, k[1:T], Bin)
     @variable(model, q_f, Int)
     @variable(model, δ[0:Q], Bin)    
 
-    #@objective(model, Min, sum(c[t] for t in 1:T) + sum(x[S+1,T+1,c,i]*V_table[i] for c in 1:nb_comp, i in 1:nb_state))
+    #@objective(model, Min, sum(c[t] for t in 1:T) + sum(x[S+1,T+1,c,i]*V_table[i] for c in 1:nb_comp, i in 1:nb_state)
+
     @objective(model, Min, sum(c[t] for t in 1:(T+1)))
 
 
-    @constraint(model, [s in 1:(S+1), t in 2:(T+1), i in 1:nb_state], x[s,t,i] == (1-u[s,t-1])*sum(P_w[i,j]*x[s,t-1,j] for j in 1:nb_state) + u[s,t-1]*sum(P_m[i,j]*x[s,t-1,j] for j in 1:nb_state))
+    @constraint(model, [t in 1:(d+5)], m[T+1-t] == 0) #avoid maintenances thatwe can't finish
 
-    @constraint(model, [s in 1:(S+1), i in 1:nb_state], q[s,1] == d*m[1])
-    @constraint(model, [s in 1:(S+1), t in 1:(T-1)], q[s,t+1] == q[s,t] - u[s,t] + d*m[t+1])
+    @constraint(model, [s in 1:S, t in 2:(T+1), i in 1:nb_state], x[s,t,i] == (1-u[s,t-1])*sum(P_w[i,j]*x[s,t-1,j] for j in 1:nb_state) + u[s,t-1]*sum(P_m[i,j]*x[s,t-1,j] for j in 1:nb_state))
+
+    @constraint(model, [s in 1:S, i in 1:nb_state], q[s,1] == d*m[1])
+    @constraint(model, [s in 1:S, t in 1:(T-1)], q[s,t+1] == q[s,t] - u[s,t] + d*m[t+1])
     @constraint(model, [s in 1:S, t in 1:(T)], u[s,t] + 1 - h[s,t] >= (1/T)*q[s,t])
-    @constraint(model, [t in 1:(T)], u[S+1,t] >= (1/T)*q[S+1,t])
-    @constraint(model, [s in 1:(S+1), t in 1:(T)], u[s,t] <= q[s,t])
+    @constraint(model, [s in 1:S, t in 1:(T)], u[s,t] <= q[s,t])
     @constraint(model, [s in 1:S, t in 1:(T)], u[s,t] <= h[s,t])
-    @constraint(model, [s in 1:(S+1), t in 1:(T)], ong_m[s,t] >= (1/T)*q[s,t])
+    @constraint(model, [s in 1:S, t in 1:(T)], ong_m[s,t] >= (1/T)*q[s,t])
 
-    @constraint(model, [s in 1:(S+1), i in 1:nb_state], x[s,1,i] == x_0[i])
+    @constraint(model, [s in 1:S, i in 1:nb_state], x[s,1,i] == x_0[i])
 
     # proba of curtailement for failure = proba of union x[c] = n^c
-    @constraint(model, [t in 1:T], c[t] >= (1/S)*sum((1 - ong_m[s,t])*x[s,t,nb_state]*product[s,t] + ong_m[s,t]*(1-k[t])*product[s,t] for s in 1:S))
+    # factor alpha could be used to avoid numerical instability
+
+    alpha = 1
+    @constraint(model, [t in 1:T], c[t] >= (alpha/S)*sum((1 - ong_m[s,t])*x[s,t,nb_state]*product[s,t] + ong_m[s,t]*(1-k[t])*product[s,t] for s in 1:S))
 
     @constraint(model, q_f == q_i - sum(k[t] for t in 1:T)) 
     @constraint(model, q_f >= 0)   
@@ -55,7 +60,11 @@ function V(T,s,q_i,S,h,product,nb_state,P_w,P_m,Q,Vals)
     @constraint(model, [j in 0:Q], q_f - j <=  M * (1 - δ[j]))
     @constraint(model, [j in 0:Q], q_f - j >= -M * (1 - δ[j]))
 
-    @constraint(model, [j in 0:Q], c[T+1] + M * (1 - δ[j]) >= (1/S)*sum(sum(x[s,T+1, i] * Vals[i, j+1] for i in 1:nb_state) for s in 1:S))
+    if is_end_year
+        @constraint(model, [j in 0:Q], c[T+1] + M * (1 - δ[j]) >= (alpha/S)*sum(sum(x[s,T+1, i] * Vals[i, Q+1] for i in 1:nb_state) for s in 1:S)) #quota goes back to Q
+    else
+        @constraint(model, [j in 0:Q], c[T+1] + M * (1 - δ[j]) >= (alpha/S)*sum(sum(x[s,T+1, i] * Vals[i, j+1] for i in 1:nb_state) for s in 1:S))
+    end
 
 
     optimize!(model)
@@ -104,17 +113,18 @@ function Bellman(years,Q,S,h,product,nb_state,P_w,P_m)
         Vals_new = zeros(nb_state, Q+1)
         for s in 1:nb_state
             for q in 0:Q
-                h_t = h[t, :, :]  # taille (S, T)
+                h_t = h[Tmax-t+1, :, :]  # taille (S, T)
                 T = 62 - count(==( -1 ), h_t[1,:]) # - 1 means ends of the month, so that we can represent months with variable lengths with vectors of the same dimensions
                 product_t = product[t, :, :]
-                val, m_opt, k_opt = V(T,s,q,S,h_t,product_t,nb_state,P_w,P_m,Q,Vals_old)
+                is_end_year = T % 6 == 1
+                val, m_opt, k_opt = V(T,s,q,S,h_t,product_t,nb_state,P_w,P_m,Q,Vals_old,is_end_year)
                 # V doit retourner (valeur, action optimale)
                 Vals_new[s, q+1] = val
                 Policies_m[s,q+1,Tmax - t + 1,1:T] = m_opt
                 Policies_k[s,q+1,Tmax - t + 1,1:T] = k_opt
             end
         end
-        Vals_all[:, :, t] = Vals_new
+        Vals_all[:, :, Tmax - t + 1] = Vals_new 
         Vals_old = Vals_new
     end
 
@@ -205,7 +215,7 @@ end
 p = 5.591277606933184e-5
 nb_state = 12
 
-Q = 1
+Q = 11 # quota of free maintenance days for each year 
 
 S = 3
 
@@ -214,10 +224,10 @@ product_month = [100 for s in 1:S, t in 1:60]
 colonnes_neg1 = fill(-1, S, 2)  # 2 months of 30 days
 product_month = hcat(product_month, colonnes_neg1)
 
-# random wave height, accessible with proba 0.9
-#d = Bernoulli(0.9)
-#h_month = [Int(rand(d)) for s in 1:S, t in 1:60]
-#h_month = hcat(h_month, colonnes_neg1)
+#random wave height, accessible with proba 0.9
+d = Bernoulli(0.9)
+h_month = [Int(rand(d)) for s in 1:S, t in 1:60]
+h_month = hcat(h_month, colonnes_neg1)
 
 P_w = zeros(nb_state, nb_state)
 
@@ -249,5 +259,8 @@ years = 1
 #end
 
 
-#Vals_all, Policies_m, Policies_k = Bellman(years,Q,S,h,p,nb_state,P_w,P_m)
+#Vals_all, Policies_m, Policies_k = Bellman(years,Q,S,h,product,nb_state,P_w,P_m)
 #state_list = simulate(Policies_m,Policies_k,h,nb_state, years,Q)
+
+#@save "Vals_converter_120725.jld2" Vals_all
+#@load "Vals_converter_120725.jld2" 
