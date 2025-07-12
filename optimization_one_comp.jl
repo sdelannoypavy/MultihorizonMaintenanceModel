@@ -215,9 +215,9 @@ colonnes_neg1 = fill(-1, S, 2)  # 2 months of 30 days
 product_month = hcat(product_month, colonnes_neg1)
 
 # random wave height, accessible with proba 0.9
-d = Bernoulli(0.9)
-h_month = [Int(rand(d)) for s in 1:S, t in 1:60]
-h_month = hcat(h_month, colonnes_neg1)
+#d = Bernoulli(0.9)
+#h_month = [Int(rand(d)) for s in 1:S, t in 1:60]
+#h_month = hcat(h_month, colonnes_neg1)
 
 P_w = zeros(nb_state, nb_state)
 
@@ -238,16 +238,16 @@ end
 
 years = 1
 
-h = Array{Float64}(undef, 6*years, S, 62)
-for t in 1:(6*years)
-    h[t,:,:] = h_month
-end
+#h = Array{Float64}(undef, 6*years, S, 62)
+#for t in 1:(6*years)
+#    h[t,:,:] = h_month
+#end
 
-product = Array{Float64}(undef, 6*years, S, 62)
-for t in 1:(6*years)
-    product[t,:,:] = product_month
-end
+#product = Array{Float64}(undef, 6*years, S, 62)
+#for t in 1:(6*years)
+#    product[t,:,:] = product_month
+#end
 
 
-#Vals_all, Policies_m, Policies_k = Bellman(years,Q,S,h,product,nb_state,P_w,P_m)
+#Vals_all, Policies_m, Policies_k = Bellman(years,Q,S,h,p,nb_state,P_w,P_m)
 #state_list = simulate(Policies_m,Policies_k,h,nb_state, years,Q)
