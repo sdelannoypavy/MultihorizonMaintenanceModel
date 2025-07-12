@@ -4,15 +4,13 @@ using Distributions
 using Random
 using StatsBase
 
-function V(s,q_i,S,h,product,nb_state,P_w,P_m,Q,Vals)
+function V(T,s,q_i,S,h,product,nb_state,P_w,P_m,Q,Vals)
 
     # Components have the same degradation model
 
     # Random initial state (might not be representative of the reality...)
     x_0 = zeros(nb_state)      
     x_0[s] = 1 
-
-    T = 60
 
     # maintenance duration is the same for all components
     d = max(s - 1,1)
@@ -72,7 +70,7 @@ function V(s,q_i,S,h,product,nb_state,P_w,P_m,Q,Vals)
 
 
     m = [value(m[t]) for t in 1:T]
-    k = [value(m[t]) for t in 1:T]
+    k = [value(k[t]) for t in 1:T]
     #u = [value(u[s,t]) for  s in 1:S, t in 1:T]
     #q = [value(q[s,t]) for  s in 1:S, t in 1:T]
     #ong_m = [value(ong_m[s,t]) for  s in 1:S, t in 1:T]
@@ -99,20 +97,21 @@ function Bellman(years,Q,S,h,product,nb_state,P_w,P_m)
     Vals_all = Array{Float64, 3}(undef, nb_state, Q+1, Tmax)
 
     # Stockage des politiques optimales à chaque pas de temps
-    Policies_m = Array{Float64}(undef, nb_state, Q+1, Tmax, 60)
-    Policies_k = Array{Float64}(undef, nb_state, Q+1, Tmax, 60)
+    Policies_m = Array{Float64}(undef, nb_state, Q+1, Tmax, 62)
+    Policies_k = Array{Float64}(undef, nb_state, Q+1, Tmax, 62)
 
     for t in 1:Tmax
         Vals_new = zeros(nb_state, Q+1)
         for s in 1:nb_state
             for q in 0:Q
                 h_t = h[t, :, :]  # taille (S, T)
+                T = 62 - count(==( -1 ), h_t[1,:]) # - 1 means ends of the month, so that we can represent months with variable lengths with vectors of the same dimensions
                 product_t = product[t, :, :]
-                val, m_opt, k_opt = V(s,q,S,h_t,product_t,nb_state,P_w,P_m,Q,Vals_old)
+                val, m_opt, k_opt = V(T,s,q,S,h_t,product_t,nb_state,P_w,P_m,Q,Vals_old)
                 # V doit retourner (valeur, action optimale)
                 Vals_new[s, q+1] = val
-                Policies_m[s,q+1,Tmax - t + 1,:] = m_opt
-                Policies_k[s,q+1,Tmax - t + 1,:] = k_opt
+                Policies_m[s,q+1,Tmax - t + 1,1:T] = m_opt
+                Policies_k[s,q+1,Tmax - t + 1,1:T] = k_opt
             end
         end
         Vals_all[:, :, t] = Vals_new
@@ -129,60 +128,68 @@ function simulate_period(Policies_m_t,state,h,nb_state)
 
     d = max(state - 1,1)
 
-    u = [0 for i in 1:60]
-    q = [0 for i in 1:60]
+    T = 62 - count(==( -1 ), h)
 
-    q[1] == d*Policies_m_t[1]
+    u = [0 for i in 1:T]
+    q = [0 for i in 1:T]
+
+    q[1] = d*Policies_m_t[1]
 
     last_state = state
 
     if (q[1]>0)&&(h[1]==1)
-        u[1] == 1
+        u[1] = 1
     end
 
-    for t in 1:60-1
-        q[t+1] == q[t] - u[t] + d*Policies_m_t[t+1]
+    for t in 1:T-1
+        q[t+1] = q[t] - u[t] + d*Policies_m_t[t+1]
         if (q[t+1]>0)&&(h[t+1]==1)
-            u[t+1] == 1
+            u[t+1] = 1
         end
-
         probas = [0.0 for i in 1:nb_state]
 
-        if u[t+1] == 0
-            probas = P_w[last_state, :]
+        if u[t] == 0
+            probas = P_w[:, last_state]
         else 
-            probas = P_m[last_state, :]
+            probas = P_m[:, last_state]
         end
         last_state = sample(1:nb_state, Weights(probas))
 
-        push!(states, last_states)
+        push!(states, last_state)
     end
 
-    return states
+    if u[T] == 0
+        probas = P_w[last_state, :]
+    else 
+        probas = P_m[last_state, :]
+    end
+    new_state = sample(1:nb_state, Weights(probas))
+
+    return states,new_state
 
 end 
 
 
 function simulate(Policies_m,Policies_k,h,nb_state, years,Q)
 
-    state_list = []
 
-    last_state = 1
+    last_state = 12
+    state_list = []
     last_q = Q
 
     for t in 1:(6*years)
 
-        Policies_k_t = Policies_k[last_state,last_q,t,:]
+        Policies_k_t = Policies_k[last_state,round(Int,last_q) + 1,t,:]
         sum_k = sum(Policies_k_t )
 
-        Policies_m_t = Policies_m[last_state,last_q,t,:]
-        h_t = h[t, :, :]
+        Policies_m_t = Policies_m[last_state,round(Int,last_q) + 1,t,:]
+        h_t = h[t, 1, :]
 
-        new_states = simulate_period(Policies_m_t,last_state,h_t,nb_state)
+        new_states, last_state = simulate_period(Policies_m_t,last_state,h_t,nb_state)
 
         last_q -= sum_k
-        last_state = new_states[end]
-        push!(state_list,new_states)
+        
+        append!(state_list, new_states)
 
     end
 
@@ -204,10 +211,13 @@ S = 3
 
 # wind park always produces the maximum amount of electricity
 product_month = [100 for s in 1:S, t in 1:60]
+colonnes_neg1 = fill(-1, S, 2)  # 2 months of 30 days
+product_month = hcat(product_month, colonnes_neg1)
 
 # random wave height, accessible with proba 0.9
 d = Bernoulli(0.9)
 h_month = [Int(rand(d)) for s in 1:S, t in 1:60]
+h_month = hcat(h_month, colonnes_neg1)
 
 P_w = zeros(nb_state, nb_state)
 
@@ -226,16 +236,14 @@ for i in 1:(nb_state)
 end
 
 
-
-
 years = 1
 
-h = Array{Float64}(undef, 6*years, S, 60)
+h = Array{Float64}(undef, 6*years, S, 62)
 for t in 1:(6*years)
     h[t,:,:] = h_month
 end
 
-product = Array{Float64}(undef, 6*years, S, 60)
+product = Array{Float64}(undef, 6*years, S, 62)
 for t in 1:(6*years)
     product[t,:,:] = product_month
 end
